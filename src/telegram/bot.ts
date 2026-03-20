@@ -1,7 +1,7 @@
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { type Message, type UserFromGetMe } from "@grammyjs/types";
-import type { ApiClientOptions } from "grammy";
+import type { ApiClientOptions, Transformer } from "grammy";
 import { Bot, webhookCallback } from "grammy";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
@@ -142,7 +142,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       : undefined;
 
   const bot = new Bot(opts.token, client ? { client } : undefined);
-  bot.api.config.use(apiThrottler());
+  // Type cast to work around grammy/@grammyjs/transformer-throttler type incompatibility
+  bot.api.config.use(apiThrottler() as Transformer);
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));

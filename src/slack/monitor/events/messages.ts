@@ -102,10 +102,13 @@ export function registerSlackMessageEvents(params: {
   });
   // Slack may dispatch channel/group message subscriptions under typed event
   // names. Register explicit handlers so both delivery styles are supported.
-  ctx.app.event("message.channels", async ({ event, body }: SlackEventMiddlewareArgs) => {
+  // Use type assertion to handle the fact that these events have different shapes
+  ctx.app.event("message.channels", async (args: unknown) => {
+    const { event, body } = args as { event: unknown; body: unknown };
     await handleIncomingMessageEvent({ event, body });
   });
-  ctx.app.event("message.groups", async ({ event, body }: SlackEventMiddlewareArgs) => {
+  ctx.app.event("message.groups", async (args: unknown) => {
+    const { event, body } = args as { event: unknown; body: unknown };
     await handleIncomingMessageEvent({ event, body });
   });
 
