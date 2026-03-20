@@ -1,32 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCronStoreHarness } from "./service.test-harness.js";
 import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
-let fixtureRoot = "";
-let fixtureCount = 0;
-
-beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-store-"));
-});
-
-afterAll(async () => {
-  if (!fixtureRoot) {
-    return;
-  }
-  await fs.rm(fixtureRoot, { recursive: true, force: true });
-});
-
-async function makeStorePath() {
-  const dir = path.join(fixtureRoot, `case-${fixtureCount++}`);
-  await fs.mkdir(dir, { recursive: true });
-  return {
-    dir,
-    storePath: path.join(dir, "jobs.json"),
-  };
-}
+const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-store-" });
 
 function makeStore(jobId: string, enabled: boolean): CronStoreFile {
   const now = Date.now();
@@ -72,8 +51,41 @@ describe("cron store", () => {
 
   it("throws when store contains invalid JSON", async () => {
     const store = await makeStorePath();
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, "{ not json", "utf-8");
     await expect(loadCronStore(store.storePath)).rejects.toThrow(/Failed to parse cron store/i);
+  });
+
+  it("accepts JSON5 syntax when loading an existing cron store", async () => {
+    const store = await makeStorePath();
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      `{
+        // hand-edited legacy store
+        version: 1,
+        jobs: [
+          {
+            id: 'job-1',
+            name: 'Job 1',
+            enabled: true,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            schedule: { kind: 'every', everyMs: 60000 },
+            sessionTarget: 'main',
+            wakeMode: 'next-heartbeat',
+            payload: { kind: 'systemEvent', text: 'tick-job-1' },
+            state: {},
+          },
+        ],
+      }`,
+      "utf-8",
+    );
+
+    await expect(loadCronStore(store.storePath)).resolves.toMatchObject({
+      version: 1,
+      jobs: [{ id: "job-1", enabled: true }],
+    });
   });
 
   it("does not create a backup file when saving unchanged content", async () => {
@@ -99,6 +111,39 @@ describe("cron store", () => {
     expect(JSON.parse(currentRaw)).toEqual(second);
     expect(JSON.parse(backupRaw)).toEqual(first);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "writes store and backup files with secure permissions",
+    async () => {
+      const store = await makeStorePath();
+      const first = makeStore("job-1", true);
+      const second = makeStore("job-2", false);
+
+      await saveCronStore(store.storePath, first);
+      await saveCronStore(store.storePath, second);
+
+      const storeMode = (await fs.stat(store.storePath)).mode & 0o777;
+      const backupMode = (await fs.stat(`${store.storePath}.bak`)).mode & 0o777;
+
+      expect(storeMode).toBe(0o600);
+      expect(backupMode).toBe(0o600);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "hardens an existing cron store directory to owner-only permissions",
+    async () => {
+      const store = await makeStorePath();
+      const storeDir = path.dirname(store.storePath);
+      await fs.mkdir(storeDir, { recursive: true, mode: 0o755 });
+      await fs.chmod(storeDir, 0o755);
+
+      await saveCronStore(store.storePath, makeStore("job-1", true));
+
+      const storeDirMode = (await fs.stat(storeDir)).mode & 0o777;
+      expect(storeDirMode).toBe(0o700);
+    },
+  );
 });
 
 describe("saveCronStore", () => {
